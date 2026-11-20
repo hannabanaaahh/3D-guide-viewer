@@ -1,0 +1,958 @@
+<!doctype html>
+<!--
+  Guide Viewer: read-only 3D viewer for assembly guides made with Guide Builder.
+  One self-contained HTML file. MIT License, see LICENSE.
+
+  Load a guide:
+    guide-viewer.html?src=path/to/my.guide        (fetch a .guide file; same origin or CORS-enabled)
+    a guide embedded below in <script id="guide-data">  (written by Guide Builder's "Export HTML")
+    drag and drop / open a .guide file
+  Options (query string): step=N  theme=light|dark  panel=side|bottom|none  toc=0  bg=%23ffffff  intro=0
+  Embedding and the postMessage API are described in README.md.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide Viewer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M8 1l6 3.5v7L8 15l-6-3.5v-7z%22 fill=%22%231c7ed6%22/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #ffffff; --surface: #f6f7f9; --surface-2: #eceff3; --text: #1d232a; --muted: #5f6b78; --line: #dfe3e8;
+  --stage: #ffffff; --accent: var(--guide-accent, #1c7ed6); --on-accent: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.06);
+  --tip: #2f9e44; --tip-bg: #ebfbee; --warn: #e03131; --warn-bg: #fff0f0; --info: #1c7ed6; --info-bg: #e7f5ff;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; --r: 8px; --progress: var(--accent);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #15191e; --surface: #1c2128; --surface-2: #262c35; --text: #e6e9ed; --muted: #9aa5b1; --line: #313945;
+    --stage: #1f252d; --on-accent: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+    --tip: #69db7c; --tip-bg: #1d2e22; --warn: #ff8787; --warn-bg: #352022; --info: #74c0fc; --info-bg: #1a2b3a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15191e; --surface: #1c2128; --surface-2: #262c35; --text: #e6e9ed; --muted: #9aa5b1; --line: #313945;
+  --stage: #1f252d; --on-accent: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+  --tip: #69db7c; --tip-bg: #1d2e22; --warn: #ff8787; --warn-bg: #352022; --info: #74c0fc; --info-bg: #1a2b3a;
+  color-scheme: dark;
+}
+/* Whimsy: storybook pastels, polka dots, rainbow progress */
+:root[data-theme="whimsy"] {
+  --bg: #fffaf0; --surface: #f4effd; --surface-2: #e9e0fb; --text: #2b2340; --muted: #6b5f86; --line: #dccff5;
+  --stage: #eef8f6; --stage-bg: radial-gradient(#d9cdf3 1.6px, transparent 1.8px) 0 0 / 22px 22px, linear-gradient(160deg, #e8f7f3, #f6efff 60%, #fff4dc);
+  --accent: #7048e8; --accent-2: #12b886; --on-accent: #ffffff; --shadow: 0 2px 0 #dccff5, 0 6px 18px rgba(112,72,232,.12);
+  --tip: #0c8a5f; --tip-bg: #e6fcf5; --warn: #d6336c; --warn-bg: #fff0f6; --info: #6741d9; --info-bg: #f3f0ff;
+  --font: ui-rounded, "SF Pro Rounded", "Nunito", "Varela Round", "Trebuchet MS", system-ui, sans-serif; --r: 14px;
+  --progress: linear-gradient(90deg, #ff8fab, #ffd43b, #69db7c, #4dabf7, #9775fa);
+  color-scheme: light;
+}
+/* Girly pop: bubblegum pink, sparkles, glossy pills */
+:root[data-theme="girlypop"] {
+  --bg: #fff0f6; --surface: #ffe3ee; --surface-2: #ffd1e3; --text: #4a1036; --muted: #9c3d72; --line: #fbbad6;
+  --stage: #ffd6e8; --stage-bg: radial-gradient(#ffffff 1.3px, transparent 1.6px) 0 0 / 18px 18px, radial-gradient(#ffffff 0.9px, transparent 1.2px) 9px 9px / 18px 18px, linear-gradient(160deg, #ffc9de, #f6d5fb 55%, #ffe0ef);
+  --accent: #d6336c; --accent-2: #ae3ec9; --on-accent: #ffffff; --shadow: 0 4px 16px rgba(214,51,108,.22);
+  --tip: #a61e4d; --tip-bg: #fff0f6; --warn: #c2255c; --warn-bg: #ffdeeb; --info: #9c36b5; --info-bg: #f8f0fc;
+  --font: ui-rounded, "SF Pro Rounded", "Nunito", "Varela Round", "Trebuchet MS", system-ui, sans-serif; --r: 16px;
+  --progress: linear-gradient(90deg, #f06595, #cc5de8, #f06595);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--font); overflow: hidden; }
+button { font: inherit; color: inherit; }
+.gv { display: grid; grid-template-rows: auto 1fr auto; height: 100%; min-height: 0; }
+
+/* top bar */
+.bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); min-width: 0; }
+.bar .title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.bar .count { color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ibtn { display: inline-grid; place-items: center; width: 34px; height: 34px; border: 1px solid transparent; border-radius: 8px; background: none; cursor: pointer; flex: none; }
+.ibtn:hover { background: var(--surface-2); }
+.ibtn:focus-visible, .btn:focus-visible, .toc button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ibtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ibtn[aria-pressed="true"] { background: var(--surface-2); }
+
+/* main area */
+.main { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(300px, 380px); grid-template-rows: minmax(0, 1fr); min-height: 0; position: relative; }
+.toc { grid-column: 1; grid-row: 1 / -1; }
+.stage { grid-column: 2; grid-row: 1; }
+.panel { grid-column: 3; grid-row: 1; }
+.gv[data-panel="none"] .main { grid-template-columns: auto minmax(0, 1fr); }
+.gv[data-panel="none"] .panel { display: none; }
+.toc { width: 250px; border-right: 1px solid var(--line); overflow: auto; padding: 8px; background: var(--surface); }
+.toc[hidden] { display: none; }
+.toc h4 { margin: 12px 8px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.toc button { display: flex; gap: 8px; width: 100%; text-align: left; border: 0; background: none; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.toc button:hover { background: var(--surface-2); }
+.toc button[aria-current="step"] { background: var(--accent); color: var(--on-accent); }
+.toc .n { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.6em; }
+.toc button[aria-current="step"] .n { color: inherit; opacity: .8; }
+
+.stage { position: relative; background: var(--stage-bg, var(--stage)); min-width: 0; min-height: 0; overflow: hidden; touch-action: none; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.stage canvas.overlay { pointer-events: none; }
+.tools { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.tools .ibtn { background: var(--bg); border-color: var(--line); box-shadow: var(--shadow); }
+.tip-label { position: absolute; pointer-events: none; padding: 3px 8px; border-radius: 6px; background: var(--text); color: var(--bg); font-size: 12px; white-space: nowrap; transform: translate(-50%, -140%); }
+.msg { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); }
+.msg .box { max-width: 420px; }
+.msg.drop { outline: 3px dashed var(--accent); outline-offset: -12px; }
+.spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 12px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* step panel */
+.panel { border-left: 1px solid var(--line); overflow: auto; padding: 16px 18px 24px; min-height: 0; }
+.panel .sec { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 2px; }
+.panel h1 { font-size: 22px; line-height: 1.25; margin: 0 0 4px; }
+.panel h2 { font-size: 19px; line-height: 1.3; margin: 0 0 10px; }
+.panel h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 8px; }
+.panel .sub { color: var(--muted); margin: 0 0 12px; }
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md img { max-width: 100%; }
+.md a { color: var(--accent); }
+.md code { background: var(--surface-2); padding: 1px 4px; border-radius: 4px; font-size: .92em; }
+.md table { border-collapse: collapse; } .md td, .md th { border: 1px solid var(--line); padding: 3px 8px; }
+.note { border-left: 4px solid var(--info); background: var(--info-bg); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+.note b { color: var(--info); display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.note.tip { border-color: var(--tip); background: var(--tip-bg); } .note.tip b { color: var(--tip); }
+.note.warning { border-color: var(--warn); background: var(--warn-bg); } .note.warning b { color: var(--warn); }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.list li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: var(--surface); border-radius: 6px; }
+.list li.part { cursor: pointer; } .list li.part:hover { background: var(--surface-2); }
+.list .qty { font-weight: 650; font-variant-numeric: tabular-nums; min-width: 2.2em; }
+.sw { width: 12px; height: 12px; border-radius: 3px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+.sw.ring { border-radius: 50%; background: none !important; box-shadow: inset 0 0 0 3px currentColor; }
+.photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.photos button { padding: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; cursor: zoom-in; background: var(--surface); aspect-ratio: 4/3; }
+.photos img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: .45; cursor: default; filter: none; }
+.meta { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+
+/* bottom nav */
+.nav { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.progress { flex: 1; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--progress); width: 0; transition: width .3s; }
+
+/* theme menu */
+.theme-wrap { position: relative; flex: none; }
+.theme-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 170px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+.theme-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; background: none; border-radius: calc(var(--r) - 3px); cursor: pointer; text-align: left; }
+.theme-menu button:hover, .theme-menu button:focus-visible { background: var(--surface-2); outline: none; }
+.theme-menu button::after { content: "✓"; margin-left: auto; visibility: hidden; color: var(--accent); font-weight: 700; }
+.theme-menu button[aria-checked="true"]::after { visibility: visible; }
+.tsw { width: 18px; height: 18px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+
+/* rounder corners in the playful themes */
+.btn, .list li, .photos button, .toc button, .ibtn { border-radius: var(--r); }
+.note { border-radius: 0 var(--r) var(--r) 0; }
+.btn.primary { border-radius: var(--r); }
+
+/* whimsy flourishes */
+[data-theme="whimsy"] .bar { border-bottom: 2px dashed var(--line); }
+[data-theme="whimsy"] .nav { border-top: 2px dashed var(--line); }
+[data-theme="whimsy"] .bar .title::before { content: "✿ "; color: var(--accent-2); }
+[data-theme="whimsy"] .panel h1, [data-theme="whimsy"] .panel h2 { text-decoration: underline wavy var(--accent-2); text-decoration-thickness: 2px; text-underline-offset: 6px; }
+[data-theme="whimsy"] .panel h3::before { content: "☆ "; color: var(--accent); }
+[data-theme="whimsy"] .progress { height: 10px; border-radius: 5px; }
+[data-theme="whimsy"] .btn.primary { box-shadow: 0 3px 0 #5235b8; }
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme="whimsy"] .btn:not(:disabled):hover { transform: rotate(-1.5deg) scale(1.03); }
+  [data-theme="whimsy"] .btn { transition: transform .15s; }
+}
+
+/* girly pop flourishes */
+[data-theme="girlypop"] .bar, [data-theme="girlypop"] .nav { background: linear-gradient(90deg, #ffe3ee, #f8e1fb); }
+[data-theme="girlypop"] .bar .title { font-weight: 800; background: linear-gradient(90deg, #d6336c, #ae3ec9); -webkit-background-clip: text; background-clip: text; color: transparent; }
+[data-theme="girlypop"] .bar .title::after { content: " ✨"; color: initial; -webkit-text-fill-color: initial; }
+[data-theme="girlypop"] .panel h1, [data-theme="girlypop"] .panel h2 { color: var(--accent); font-weight: 800; }
+[data-theme="girlypop"] .panel h3::before { content: "♡ "; }
+[data-theme="girlypop"] .btn { border-radius: 999px; }
+[data-theme="girlypop"] .btn.primary { background: linear-gradient(135deg, #f06595, #d6336c 50%, #ae3ec9); border-color: transparent; box-shadow: 0 4px 14px rgba(214,51,108,.4), inset 0 1px 0 rgba(255,255,255,.4); }
+[data-theme="girlypop"] .progress { height: 10px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line); }
+[data-theme="girlypop"] .toc button[aria-current="step"] { background: linear-gradient(135deg, #f06595, #ae3ec9); }
+
+.lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: grid; place-items: center; padding: 16px; z-index: 10; cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 6px; }
+.lightbox[hidden] { display: none; }
+
+.gv[data-panel="bottom"] .main { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(220px, 58%) minmax(0, 1fr); }
+.gv[data-panel="bottom"] .panel { grid-column: 2; grid-row: 2; border-left: 0; border-top: 1px solid var(--line); }
+@media (max-width: 860px) {
+  .main, .gv[data-panel] .main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 52%) minmax(0, 1fr); }
+  .gv[data-panel="none"] .main { grid-template-rows: minmax(0, 1fr); }
+  .stage, .gv[data-panel] .stage { grid-column: 1; grid-row: 1; }
+  .panel, .gv[data-panel] .panel { grid-column: 1; grid-row: 2; border-left: 0; border-top: 1px solid var(--line); padding: 14px 16px 20px; }
+  .toc { position: absolute; z-index: 5; inset: 0 auto 0 0; width: min(280px, 85%); box-shadow: var(--shadow); }
+}
+@media (prefers-reduced-motion: reduce) { .progress i { transition: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+</head>
+<body>
+<div class="gv" id="gv" data-panel="side">
+  <header class="bar">
+    <button class="ibtn" id="toc-btn" title="Steps" aria-label="Show steps" aria-pressed="false" aria-controls="toc"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <div class="title" id="title">Guide Viewer</div>
+    <span class="count" id="count"></span>
+    <button class="ibtn" id="open-btn" title="Open a .guide file" aria-label="Open a .guide file" hidden><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+    <div class="theme-wrap" id="theme-wrap">
+      <button class="ibtn" id="theme-btn" title="Theme" aria-label="Change theme" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-menu"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/></svg></button>
+      <div class="theme-menu" id="theme-menu" role="menu" aria-label="Theme" hidden>
+        <button role="menuitemradio" data-theme-opt="light" aria-checked="false"><span class="tsw" style="background:linear-gradient(135deg,#ffffff 50%,#1c7ed6 50%)"></span>Light</button>
+        <button role="menuitemradio" data-theme-opt="dark" aria-checked="false"><span class="tsw" style="background:linear-gradient(135deg,#15191e 50%,#4dabf7 50%)"></span>Dark</button>
+        <button role="menuitemradio" data-theme-opt="whimsy" aria-checked="false"><span class="tsw" style="background:conic-gradient(#ff8fab,#ffd43b,#69db7c,#4dabf7,#9775fa,#ff8fab)"></span>Whimsy</button>
+        <button role="menuitemradio" data-theme-opt="girlypop" aria-checked="false"><span class="tsw" style="background:linear-gradient(135deg,#ffc9de,#f06595 55%,#ae3ec9)"></span>Girly pop</button>
+      </div>
+    </div>
+    <button class="ibtn" id="fs-btn" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  </header>
+  <div class="main">
+    <nav class="toc" id="toc" hidden aria-label="Steps"></nav>
+    <div class="stage" id="stage">
+      <div class="msg" id="msg"><div class="box"><div class="spinner"></div>Loading…</div></div>
+      <div class="tools" id="tools" hidden>
+        <button class="ibtn" id="reset-btn" title="Reset view" aria-label="Reset view"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg></button>
+        <button class="ibtn" id="fit-btn" title="Fit all parts in view" aria-label="Fit all parts in view"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+        <button class="ibtn" id="holes-btn" title="Show hole markers" aria-label="Show hole markers" aria-pressed="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+    </div>
+    <article class="panel" id="panel" aria-live="polite"></article>
+  </div>
+  <footer class="nav">
+    <button class="btn" id="prev">◀ Back</button>
+    <div class="progress" role="progressbar" aria-label="Progress" aria-valuemin="0" id="progress"><i></i></div>
+    <button class="btn primary" id="next">Next ▶</button>
+  </footer>
+</div>
+<div class="lightbox" id="lightbox" hidden><img alt=""></div>
+<input type="file" id="file" accept=".guide,.zip" hidden>
+
+<!-- Guide Builder's "Export HTML" puts a base64 .guide file in here. Leave it empty to load with ?src= or by drag and drop. -->
+<script type="application/x-guide+base64" id="guide-data"></script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const Z_UP = new THREE.Vector3(0, 0, 1);
+THREE.Object3D.DEFAULT_UP.copy(Z_UP);
+const $ = (s) => document.querySelector(s);
+const params = new URLSearchParams(location.search);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ------------------------------------------------------------------ options
+const gv = $('#gv');
+// themes: ?theme= sets the start theme, the reader's pick is remembered in this browser, ?themes=0 hides the menu
+const THEMES = ['light', 'dark', 'whimsy', 'girlypop'];
+const THEME_KEY = 'guide-viewer-theme';
+const systemTheme = () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+const currentTheme = () => document.documentElement.dataset.theme || systemTheme();
+function setTheme(t, save = true) {
+  if (!THEMES.includes(t)) return;
+  document.documentElement.dataset.theme = t;
+  if (save) { try { localStorage.setItem(THEME_KEY, t); } catch {} }
+  syncThemeMenu();
+}
+function syncThemeMenu() {
+  const cur = currentTheme();
+  document.querySelectorAll('[data-theme-opt]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.themeOpt === cur)));
+}
+{
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch {}
+  const start = THEMES.includes(params.get('theme')) ? params.get('theme') : THEMES.includes(saved) ? saved : null;
+  if (start) setTheme(start, false);
+  if (params.get('themes') === '0') $('#theme-wrap').hidden = true;
+  syncThemeMenu();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', syncThemeMenu);
+  const btn = $('#theme-btn'), menu = $('#theme-menu');
+  const items = () => [...menu.querySelectorAll('[data-theme-opt]')];
+  const openMenu = (open) => {
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) (items().find((b) => b.getAttribute('aria-checked') === 'true') || items()[0]).focus();
+  };
+  btn.onclick = () => openMenu(menu.hidden);
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-theme-opt]');
+    if (!b) return;
+    setTheme(b.dataset.themeOpt);
+    openMenu(false); btn.focus();
+  });
+  menu.addEventListener('keydown', (e) => {
+    const list = items(), i = list.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); openMenu(false); btn.focus(); }
+    e.stopPropagation(); // keep arrow keys from changing the step while the menu is open
+  });
+  document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !e.target.closest('#theme-wrap')) openMenu(false); });
+}
+if (['side', 'bottom', 'none'].includes(params.get('panel'))) gv.dataset.panel = params.get('panel');
+if (params.get('bg')) $('#stage').style.background = params.get('bg');
+const showIntro = params.get('intro') !== '0';
+
+// ------------------------------------------------------------------ loading
+async function readGuide(buf) {
+  const zip = await JSZip.loadAsync(buf);
+  const pj = zip.file('project.json');
+  if (!pj) throw new Error('This file is not a Guide Builder project (project.json is missing).');
+  const project = normalise(JSON.parse(await pj.async('string')));
+  const geoms = new Map(), images = new Map();
+  for (const [path, f] of Object.entries(zip.files)) {
+    if (path.startsWith('geom/') && path.endsWith('.bin')) geoms.set(path.slice(5, -4), new Float32Array(await f.async('arraybuffer')));
+    if (path.startsWith('images/') && path.endsWith('.txt')) {
+      const url = (await f.async('string')).trim();
+      if (/^data:image\/(png|jpe?g|gif|webp|avif|bmp|svg\+xml)[;,]/i.test(url)) images.set(path.slice(7, -4), url);
+    }
+  }
+  return { project, geoms, images };
+}
+function normalise(p) {
+  p.meta = { title: 'Assembly Guide', subtitle: '', author: '', version: '', date: '', intro: '', requirements: '', coverStepId: null, ...p.meta };
+  p.settings = { accent: '#1c7ed6', renderW: 1600, renderH: 1000, edges: true, ...p.settings };
+  p.holeTypes = p.holeTypes || [];
+  p.parts = p.parts || [];
+  p.sections = (p.sections || []).filter((s) => s.steps?.length);
+  for (const s of p.sections) for (const st of s.steps)
+    Object.assign(st, { notes: [], hardware: [], callouts: [], arrows: [], images: [], parts: {}, explode: 0, ...st });
+  return p;
+}
+const colorOk = (c, d) => (typeof c === 'string' && /^#[0-9a-f]{3,8}$/i.test(c) ? c : d);
+
+// ------------------------------------------------------------------ markdown (sanitised)
+DOMPurify.addHook('afterSanitizeAttributes', (n) => { if (n.tagName === 'A') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener noreferrer'); } });
+const md = (s) => { const d = document.createElement('div'); d.className = 'md'; d.innerHTML = DOMPurify.sanitize(marked.parse(String(s || ''))); return d; };
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'style') e.style.cssText = v;
+    else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : String(k));
+  return e;
+}
+
+// ------------------------------------------------------------------ 3D scene
+class Scene3D {
+  constructor(stage) {
+    this.stage = stage;
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setClearColor(0x000000, 0);
+    stage.prepend(this.renderer.domElement);
+    this.overlay = el('canvas', { class: 'overlay' });
+    this.renderer.domElement.after(this.overlay);
+
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(30, 1, 0.5, 20000);
+    this.camera.up.copy(Z_UP);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.6));
+    const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(1, -1.5, 2); this.camera.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.6); fill.position.set(-2, 1, 0.5); this.camera.add(fill);
+    this.scene.add(this.camera);
+    this.root = new THREE.Group(); this.scene.add(this.root);
+    this.worldArrows = new THREE.Group(); this.root.add(this.worldArrows);
+    this.meshes = new Map();
+    this.baseFov = 30; this.frameAspect = 1.6;
+    this.showHoles = true;
+
+    this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
+    this.orbit.enableDamping = true; this.orbit.dampingFactor = 0.12;
+    this.orbit.addEventListener('change', () => this.dirty());
+    this.orbit.addEventListener('start', () => { this.anim = this.anim && { ...this.anim, cam: null }; });
+
+    new ResizeObserver(() => this.resize()).observe(stage);
+    this.resize();
+    const loop = (t) => {
+      requestAnimationFrame(loop);
+      const moving = this.orbit.update();
+      if (this.anim) this._tick(t);
+      if (this._dirty || moving) { this._dirty = false; this._render(); }
+    };
+    requestAnimationFrame(loop);
+  }
+  dirty() { this._dirty = true; }
+
+  resize() {
+    const w = this.stage.clientWidth, h = this.stage.clientHeight;
+    if (!w || !h) return;
+    this.renderer.setSize(w, h, false);
+    this.overlay.width = w * devicePixelRatio; this.overlay.height = h * devicePixelRatio;
+    this.camera.aspect = w / h;
+    this._updateFov();
+    this.dirty();
+  }
+  /** Step cameras are defined for the guide's picture frame (renderW x renderH); fit that frame in the viewport. */
+  _updateFov() {
+    const w = this.stage.clientWidth, h = this.stage.clientHeight;
+    if (!w || !h) return;
+    const fa = this.frameAspect, fh = w / h >= fa ? h : w / fa;
+    this.frameH = fh;
+    this.camera.fov = (2 * Math.atan(Math.tan((this.baseFov * Math.PI) / 360) * (h / fh)) * 180) / Math.PI;
+    this.camera.updateProjectionMatrix();
+  }
+
+  load(project, geoms) {
+    for (const m of this.meshes.values()) {
+      this.root.remove(m);
+      m.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+    }
+    this.meshes.clear();
+    this.step = null; this._shown = false; this.anim = null;
+    this.project = project;
+    this.accent = colorOk(project.settings.accent, '#1c7ed6');
+    this.frameAspect = (project.settings.renderW / project.settings.renderH) || 1.6;
+    this._updateFov();
+    const holeTypes = new Map(project.holeTypes.map((t) => [t.id, t]));
+    const cache = new Map();
+    for (const part of project.parts) {
+      const pos = geoms.get(part.geom);
+      if (!pos) continue;
+      let g = cache.get(part.geom);
+      if (!g) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geometry.computeVertexNormals(); geometry.computeBoundingBox(); geometry.computeBoundingSphere();
+        g = { geometry, edges: new THREE.EdgesGeometry(geometry, 28) };
+        cache.set(part.geom, g);
+      }
+      const mat = new THREE.MeshStandardMaterial({ color: colorOk(part.color, '#adb5bd'), roughness: 0.65, metalness: 0.05,
+        polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+      const m = new THREE.Mesh(g.geometry, mat);
+      m.userData.partId = part.id;
+      const edges = new THREE.LineSegments(g.edges, new THREE.LineBasicMaterial({ color: 0x1d232a, transparent: true, opacity: 0.55 }));
+      edges.raycast = () => {};
+      edges.visible = project.settings.edges !== false;
+      m.add(edges);
+      const holes = this._holeMarkers(part, holeTypes);
+      m.add(holes);
+      const arrows = new THREE.Group(); m.add(arrows);
+      Object.assign(m.userData, { edges, holes, arrows, opacity: 0 });
+      m.visible = false;
+      this.root.add(m);
+      this.meshes.set(part.id, m);
+    }
+  }
+
+  _holeMarkers(part, types) {
+    const hg = new THREE.Group();
+    for (const h of part.holes || []) {
+      const t = types.get(h.type);
+      if (h.hidden || !h.type || (t && t.hidden) || !h.a || !h.c) continue;
+      const color = new THREE.Color(colorOk(t?.color, '#868e96'));
+      const hex = h.shape === 'hex';
+      const r = (hex ? h.d / Math.cos(Math.PI / 6) : h.d) / 2;
+      const torus = new THREE.Mesh(new THREE.TorusGeometry(r * 1.08, Math.max(0.18, r * 0.12), 8, hex ? 6 : 40), new THREE.MeshBasicMaterial({ color }));
+      if (hex) torus.rotation.z = Math.PI / 6;
+      torus.position.z = 0.05;
+      const depth = h.depth || r * 2;
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.9, r * 0.9, depth, hex ? 6 : 24, 1, true),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }));
+      cyl.rotation.x = Math.PI / 2; cyl.position.z = -depth / 2;
+      const o = new THREE.Group();
+      o.add(torus, cyl);
+      o.quaternion.setFromUnitVectors(Z_UP, new THREE.Vector3(...h.a).normalize());
+      o.position.set(...h.c);
+      o.traverse((x) => { x.raycast = () => {}; });
+      hg.add(o);
+    }
+    return hg;
+  }
+
+  /** Target state of every part for a step: visible, position (with explode), rotation, look. */
+  stepState(step, newIds) {
+    const ps = step.parts || {};
+    const vis = Object.entries(ps).filter(([id, s]) => s.v && this.meshes.has(id));
+    const off = new Map();
+    if (step.explode && vis.length > 1) {
+      const c = new THREE.Vector3();
+      vis.forEach(([, s]) => c.add(new THREE.Vector3(...s.p)));
+      c.divideScalar(vis.length);
+      for (const [id, s] of vis) off.set(id, new THREE.Vector3(...s.p).sub(c).multiplyScalar(step.explode));
+    }
+    const out = new Map();
+    for (const id of this.meshes.keys()) {
+      const s = ps[id];
+      if (!s || !s.v) { out.set(id, null); continue; }
+      const look = !s.look || s.look === 'auto' ? (this.project.settings.autoHighlight !== false && newIds.has(id) ? 'highlight' : 'normal') : s.look;
+      out.set(id, { p: new THREE.Vector3(...s.p).add(off.get(id) || new THREE.Vector3()), q: new THREE.Quaternion(...s.q), look });
+    }
+    return out;
+  }
+
+  show(step, newIds, { animate = true } = {}) {
+    this.step = step;
+    const target = this.stepState(step, newIds);
+    const dur = animate && !reduceMotion && this._shown ? 650 : 0;
+    this._shown = true;
+    const parts = [];
+    for (const [id, m] of this.meshes) {
+      const to = target.get(id);
+      const wasVisible = m.visible && m.userData.opacity > 0.01;
+      if (!to && !wasVisible) { m.visible = false; continue; }
+      parts.push({
+        m, to,
+        p0: m.position.clone(), q0: m.quaternion.clone(), o0: wasVisible ? m.userData.opacity : 0,
+        p1: to ? to.p : m.position.clone(), q1: to ? to.q : m.quaternion.clone(), o1: to ? (to.look === 'ghost' ? 0.18 : 1) : 0,
+        jump: !wasVisible, // appearing parts start at their final place and fade in
+      });
+      if (to) { m.userData.look = to.look; this._applyLook(m); }
+    }
+    this._buildArrows(step);
+    this._setHoles();
+    const cam = step.camera ? { p: new THREE.Vector3(...step.camera.p), t: new THREE.Vector3(...step.camera.t), fov: step.camera.fov || 30 } : this._fitCam(target);
+    this.anim = { t0: performance.now(), dur, parts, cam: cam && { p0: this.camera.position.clone(), t0: this.orbit.target.clone(), f0: this.baseFov, ...cam } };
+    this.homeCam = cam;
+    this._tick(performance.now());
+  }
+  _tick(now) {
+    const a = this.anim;
+    const k = a.dur ? Math.min(1, (now - a.t0) / a.dur) : 1;
+    const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    for (const it of a.parts) {
+      const { m } = it;
+      if (it.jump) { m.position.copy(it.p1); m.quaternion.copy(it.q1); }
+      else { m.position.lerpVectors(it.p0, it.p1, e); m.quaternion.slerpQuaternions(it.q0, it.q1, e); }
+      m.userData.opacity = it.o0 + (it.o1 - it.o0) * e;
+      m.visible = m.userData.opacity > 0.005;
+      this._applyOpacity(m);
+    }
+    if (a.cam) {
+      this.camera.position.lerpVectors(a.cam.p0, a.cam.p, e);
+      this.orbit.target.lerpVectors(a.cam.t0, a.cam.t, e);
+      this.baseFov = a.cam.f0 + (a.cam.fov - a.cam.f0) * e;
+      this._updateFov();
+    }
+    this.dirty();
+    if (k >= 1) this.anim = null;
+  }
+  _applyLook(m) {
+    const look = m.userData.look, mat = m.material;
+    const hl = new THREE.Color(this.accent);
+    mat.emissive.set(look === 'highlight' ? hl : 0x000000);
+    mat.emissiveIntensity = look === 'highlight' ? 0.28 : 0;
+    m.userData.edges.material.color.set(look === 'highlight' ? hl.clone().multiplyScalar(0.6) : new THREE.Color(0x1d232a));
+    m.userData.edgeOpacity = look === 'ghost' ? 0.12 : look === 'highlight' ? 0.9 : 0.55;
+  }
+  _applyOpacity(m) {
+    const o = m.userData.opacity, mat = m.material;
+    const tr = o < 0.999;
+    if (mat.transparent !== tr) { mat.transparent = tr; mat.needsUpdate = true; }
+    mat.opacity = o;
+    mat.depthWrite = o > 0.5;
+    const em = m.userData.edges.material;
+    em.opacity = (m.userData.edgeOpacity ?? 0.55) * Math.min(1, o);
+    m.userData.holes.visible = this.showHoles && this.step?.showHoles !== false && o > 0.5 && m.userData.look !== 'ghost';
+  }
+  _setHoles() { for (const m of this.meshes.values()) this._applyOpacity(m); this.dirty(); }
+  flash(partId) {
+    const m = this.meshes.get(partId);
+    if (!m || !m.visible) return;
+    const t0 = performance.now(), mat = m.material, base = mat.emissive.clone(), bi = mat.emissiveIntensity;
+    const step = (t) => {
+      const k = (t - t0) / 900;
+      if (k >= 1) { mat.emissive.copy(base); mat.emissiveIntensity = bi; this.dirty(); return; }
+      mat.emissive.set(this.accent); mat.emissiveIntensity = 0.6 * Math.sin(k * Math.PI * 3) ** 2;
+      this.dirty(); requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  _buildArrows(step) {
+    for (const m of this.meshes.values()) m.userData.arrows.clear();
+    this.worldArrows.clear();
+    for (const a of step.arrows || []) {
+      if (!a.lp || !a.ld) continue;
+      const parent = a.partId ? this.meshes.get(a.partId)?.userData.arrows : this.worldArrows;
+      if (parent) parent.add(makeArrow(a));
+    }
+  }
+
+  visibleBox(target) {
+    const box = new THREE.Box3();
+    for (const [id, m] of this.meshes) {
+      const s = target ? target.get(id) : (m.visible ? { p: m.position, q: m.quaternion, look: m.userData.look } : null);
+      if (!s || s.look === 'ghost') continue;
+      const mx = new THREE.Matrix4().compose(s.p, s.q, new THREE.Vector3(1, 1, 1));
+      box.union(m.geometry.boundingBox.clone().applyMatrix4(mx));
+    }
+    return box;
+  }
+  _fitCam(target, dir) {
+    const box = this.visibleBox(target);
+    if (box.isEmpty()) return null;
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const d = dir ? dir.clone().normalize() : new THREE.Vector3(1, -1.2, 0.9).normalize();
+    const fov = (30 * Math.PI) / 180;
+    const fitFov = Math.min(fov, 2 * Math.atan(Math.tan(fov / 2) * this.frameAspect));
+    const dist = (sphere.radius / Math.sin(fitFov / 2)) * 1.05;
+    return { p: sphere.center.clone().addScaledVector(d, dist), t: sphere.center.clone(), fov: 30 };
+  }
+  flyTo(cam) {
+    if (!cam) return;
+    this.anim = { t0: performance.now(), dur: reduceMotion ? 0 : 500, parts: [], cam: { p0: this.camera.position.clone(), t0: this.orbit.target.clone(), f0: this.baseFov, ...cam } };
+  }
+  resetView() { this.flyTo(this.homeCam); }
+  fitAll() {
+    const dir = this.camera.position.clone().sub(this.orbit.target);
+    this.flyTo(this._fitCam(null, dir));
+  }
+
+  pick(clientX, clientY) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(ndc, this.camera);
+    const objs = [...this.meshes.values()].filter((m) => m.visible && m.userData.look !== 'ghost');
+    const hit = rc.intersectObjects(objs, false)[0];
+    return hit ? hit.object.userData.partId : null;
+  }
+
+  _render() {
+    this.renderer.render(this.scene, this.camera);
+    const ctx = this.overlay.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+    if (this.anim || !this.step) return;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+    const scale = Math.min(1.4, Math.max(0.6, (this.frameH || 600) / 640));
+    drawCallouts(ctx, this, this.stage.clientWidth, this.stage.clientHeight, scale);
+  }
+}
+
+function makeArrow(a) {
+  const g = new THREE.Group();
+  const L = a.len || 20;
+  const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(colorOk(a.color, '#e03131')) });
+  const headL = Math.min(L * 0.35, Math.max(3, L * 0.25)), headR = Math.max(1.2, L * 0.07), shaftR = headR * 0.4;
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftR, shaftR, L - headL, 12), mat);
+  shaft.position.y = (L - headL) / 2;
+  const head = new THREE.Mesh(new THREE.ConeGeometry(headR, headL, 16), mat);
+  head.position.y = L - headL / 2;
+  const dir = new THREE.Vector3(...a.ld).normalize();
+  g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  const tip = new THREE.Vector3(...a.lp).addScaledVector(dir, -(a.gap ?? 1));
+  g.position.copy(tip).addScaledVector(dir, -L);
+  g.add(shaft, head);
+  g.traverse((o) => { o.raycast = () => {}; });
+  return g;
+}
+
+function drawCallouts(ctx, s3, w, h, scale) {
+  const step = s3.step;
+  for (const c of step.callouts || []) {
+    if (!c.lp) continue;
+    let wp;
+    if (c.partId) {
+      const m = s3.meshes.get(c.partId);
+      if (!m || !m.visible) continue;
+      m.updateMatrixWorld();
+      wp = new THREE.Vector3(...c.lp).applyMatrix4(m.matrixWorld);
+    } else wp = new THREE.Vector3(...c.lp);
+    const v = wp.project(s3.camera);
+    if (v.z > 1) continue;
+    const px = ((v.x + 1) / 2) * w, py = ((1 - v.y) / 2) * h;
+    const fs = 14 * scale, pad = 6 * scale;
+    ctx.font = `600 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
+    const lines = String(c.text || '').split('\n');
+    const tw = Math.max(...lines.map((l) => ctx.measureText(l).width), 10);
+    const bw = tw + pad * 2, bh = lines.length * fs * 1.25 + pad * 1.4;
+    const bx = px + (c.dx || 0) * scale - bw / 2, by = py + (c.dy || 0) * scale - bh / 2;
+    const col = colorOk(c.color, s3.accent);
+    ctx.strokeStyle = col; ctx.lineWidth = 2 * scale;
+    ctx.beginPath(); ctx.moveTo(px, py);
+    ctx.lineTo(Math.min(Math.max(px, bx), bx + bw), Math.min(Math.max(py, by), by + bh)); ctx.stroke();
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(px, py, 3.5 * scale, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 5 * scale); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1d232a'; ctx.textBaseline = 'top';
+    lines.forEach((l, i) => ctx.fillText(l, bx + pad, by + pad * 0.7 + i * fs * 1.25));
+  }
+}
+
+// ------------------------------------------------------------------ guide logic
+const G = { project: null, images: new Map(), steps: [], idx: 0, s3: null };
+const partById = (id) => G.project.parts.find((p) => p.id === id);
+
+/** Parts that appear in step i and were not shown (or were ghosted) in step i-1. */
+function newParts(i) {
+  const st = G.steps[i], prev = G.steps[i - 1];
+  return G.project.parts.filter((pt) => {
+    const s = st.parts[pt.id];
+    if (!s || !s.v || s.look === 'ghost') return false;
+    const ps = prev && prev.parts[pt.id];
+    return !ps || !ps.v || ps.look === 'ghost';
+  });
+}
+/** Auto-highlighted parts: the new ones, unless every visible part is new (e.g. the first step). */
+function newIds(i) {
+  const ids = new Set(newParts(i).map((p) => p.id));
+  const visible = Object.entries(G.steps[i].parts).filter(([id, s]) => s.v && s.look !== 'ghost' && partById(id)).length;
+  return ids.size && ids.size >= visible ? new Set() : ids;
+}
+function groupParts(parts) {
+  const m = new Map();
+  for (const pt of parts) {
+    const k = pt.geom + '|' + pt.name;
+    const g = m.get(k);
+    if (g) g.qty++; else m.set(k, { part: pt, qty: 1, ids: [pt.id] });
+    if (g) g.ids.push(pt.id);
+  }
+  return [...m.values()];
+}
+const hasIntro = () => showIntro;
+const total = () => G.steps.length + (hasIntro() ? 1 : 0);
+const stepIndex = (pos) => pos - (hasIntro() ? 1 : 0); // pos 0 = intro when shown
+
+async function start(buf) {
+  const { project, geoms, images } = await readGuide(buf);
+  G.project = project; G.images = images;
+  G.steps = project.sections.flatMap((s) => s.steps.map((st) => Object.assign(st, { _section: s })));
+  if (!G.steps.length) throw new Error('This guide has no steps.');
+  document.documentElement.style.setProperty('--guide-accent', colorOk(project.settings.accent, '#1c7ed6'));
+  document.title = project.meta.title || 'Guide Viewer';
+  $('#title').textContent = project.meta.title || 'Assembly guide';
+  if (!G.s3) G.s3 = new Scene3D($('#stage'));
+  G.s3.load(project, geoms);
+  $('#msg').hidden = true;
+  $('#tools').hidden = false;
+  buildToc();
+  const fromHash = /(?:^|&)step=(\d+)/.exec(location.hash.slice(1));
+  const want = fromHash ? +fromHash[1] : params.has('step') ? +params.get('step') : 0;
+  go(Math.max(0, Math.min(total() - 1, want)), false);
+  post({ type: 'guide:ready', title: project.meta.title, steps: G.steps.length, intro: hasIntro() });
+}
+
+function go(pos, animate = true) {
+  pos = Math.max(0, Math.min(total() - 1, pos));
+  G.idx = pos;
+  const si = stepIndex(pos);
+  const intro = si < 0;
+  const coverI = Math.max(0, G.steps.findIndex((s) => s.id === G.project.meta.coverStepId));
+  const shownI = intro ? (G.project.meta.coverStepId ? coverI : G.steps.length - 1) : si;
+  G.s3.show(G.steps[shownI], intro ? new Set() : newIds(shownI), { animate });
+  renderPanel(si);
+  $('#count').textContent = intro ? `${G.steps.length} steps` : `Step ${si + 1} / ${G.steps.length}`;
+  $('#prev').disabled = pos === 0;
+  $('#next').disabled = pos === total() - 1;
+  $('#next').textContent = intro ? 'Start ▶' : 'Next ▶';
+  $('#progress i').style.width = (total() > 1 ? (pos / (total() - 1)) * 100 : 100) + '%';
+  $('#progress').setAttribute('aria-valuenow', String(pos));
+  $('#progress').setAttribute('aria-valuemax', String(total() - 1));
+  document.querySelectorAll('#toc button').forEach((b) => { if (+b.dataset.pos === pos) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current'); });
+  try { history.replaceState(null, '', '#step=' + pos); } catch {}
+  post({ type: 'guide:step', step: pos, index: si, id: intro ? null : G.steps[si].id, title: intro ? G.project.meta.title : G.steps[si].title });
+}
+
+function buildToc() {
+  const toc = $('#toc');
+  toc.replaceChildren();
+  let pos = 0;
+  if (hasIntro()) toc.append(tocBtn(pos++, '', 'Introduction'));
+  let n = 1;
+  for (const sec of G.project.sections) {
+    if (G.project.sections.length > 1 || sec.title) toc.append(el('h4', {}, sec.title || ''));
+    for (const st of sec.steps) toc.append(tocBtn(pos++, n++, st.title || 'Step'));
+  }
+}
+function tocBtn(pos, n, label) {
+  return el('button', { 'data-pos': pos, onclick: () => { go(pos); if (matchMedia('(max-width: 860px)').matches) toggleToc(false); } },
+    el('span', { class: 'n' }, n), el('span', {}, label));
+}
+function toggleToc(force) {
+  const toc = $('#toc');
+  const show = force ?? toc.hidden;
+  toc.hidden = !show;
+  $('#toc-btn').setAttribute('aria-pressed', String(show));
+}
+
+function renderPanel(si) {
+  const p = G.project, panel = $('#panel');
+  panel.replaceChildren();
+  panel.scrollTop = 0;
+  if (si < 0) {
+    const m = p.meta;
+    panel.append(el('h1', {}, m.title || 'Assembly guide'));
+    if (m.subtitle) panel.append(el('p', { class: 'sub' }, m.subtitle));
+    const bits = [m.author && 'By ' + m.author, m.version && 'Version ' + m.version, m.date].filter(Boolean);
+    if (bits.length) panel.append(el('p', { class: 'meta' }, bits.join(' · ')));
+    if (m.intro) panel.append(md(m.intro));
+    if (m.requirements) panel.append(el('h3', {}, 'You will need'), md(m.requirements));
+    const visibleParts = p.parts.filter((pt) => G.steps.some((st) => st.parts[pt.id]?.v));
+    if (visibleParts.length) panel.append(el('h3', {}, `Parts (${visibleParts.length})`), partList(groupParts(visibleParts), false));
+    const used = new Set(visibleParts.flatMap((pt) => (pt.holes || []).filter((h) => !h.hidden).map((h) => h.type)));
+    const types = p.holeTypes.filter((t) => used.has(t.id) && !t.hidden);
+    if (types.length) {
+      panel.append(el('h3', {}, 'Hole markers'), el('ul', { class: 'list' }, types.map((t) =>
+        el('li', {}, el('span', { class: 'sw ring', style: `color:${colorOk(t.color, '#868e96')}` }), el('span', {}, t.name || t.id, t.hardware ? el('span', { class: 'meta' }, ' · ' + t.hardware) : '')))));
+    }
+    panel.append(el('p', { style: 'margin-top:20px' }, el('button', { class: 'btn primary', onclick: () => go(G.idx + 1) }, 'Start the guide ▶')));
+    return;
+  }
+  const st = G.steps[si];
+  const sec = st._section;
+  if (sec?.title) panel.append(el('p', { class: 'sec' }, sec.title));
+  panel.append(el('h2', {}, `Step ${si + 1}${st.title ? ': ' + st.title : ''}`));
+  if (sec && sec.steps[0] === st && sec.intro) panel.append(md(sec.intro), el('hr', { style: 'border:0;border-top:1px solid var(--line);margin:14px 0' }));
+  if (st.text) panel.append(md(st.text));
+  for (const nt of st.notes || []) {
+    if (!nt.text) continue;
+    const kind = ['tip', 'warning'].includes(nt.kind) ? nt.kind : 'info';
+    const n = el('div', { class: 'note ' + kind }, el('b', {}, { tip: 'Tip', warning: 'Warning', info: 'Note' }[kind]));
+    n.append(md(nt.text));
+    panel.append(n);
+  }
+  const np = groupParts(newParts(si));
+  if (np.length) panel.append(el('h3', {}, 'Parts'), partList(np, true));
+  const hw = (st.hardware || []).filter((x) => x.name);
+  if (hw.length) panel.append(el('h3', {}, 'Hardware'), el('ul', { class: 'list' }, hw.map((x) => el('li', {}, el('span', { class: 'qty' }, `${x.qty ?? 1}×`), el('span', {}, x.name)))));
+  const imgs = (st.images || []).map((id) => G.images.get(id)).filter(Boolean);
+  if (imgs.length) panel.append(el('h3', {}, 'Photos'), el('div', { class: 'photos' }, imgs.map((u, i) =>
+    el('button', { 'aria-label': `Open photo ${i + 1}`, onclick: () => openLightbox(u) }, el('img', { src: u, alt: `Photo ${i + 1} for step ${si + 1}`, loading: 'lazy' })))));
+}
+function partList(groups, clickable) {
+  return el('ul', { class: 'list' }, groups.map((g) => el('li', {
+    class: clickable ? 'part' : null, title: clickable ? 'Show this part' : null, tabindex: clickable ? 0 : null,
+    onclick: clickable ? () => g.ids.forEach((id) => G.s3.flash(id)) : null,
+    onkeydown: clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); g.ids.forEach((id) => G.s3.flash(id)); } } : null,
+  }, el('span', { class: 'sw', style: `background:${colorOk(g.part.color, '#adb5bd')}` }), el('span', { class: 'qty' }, `${g.qty}×`), el('span', {}, g.part.name || 'Part'))));
+}
+function openLightbox(url) { const lb = $('#lightbox'); lb.querySelector('img').src = url; lb.hidden = false; }
+$('#lightbox').onclick = () => { $('#lightbox').hidden = true; };
+
+// ------------------------------------------------------------------ UI wiring
+$('#prev').onclick = () => go(G.idx - 1);
+$('#next').onclick = () => go(G.idx + 1);
+$('#toc-btn').onclick = () => toggleToc();
+$('#reset-btn').onclick = () => G.s3?.resetView();
+$('#fit-btn').onclick = () => G.s3?.fitAll();
+$('#holes-btn').onclick = (e) => {
+  const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+  if (G.s3) { G.s3.showHoles = on; G.s3._setHoles(); }
+};
+const fsTarget = document.documentElement;
+if (!fsTarget.requestFullscreen) $('#fs-btn').hidden = true;
+$('#fs-btn').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : fsTarget.requestFullscreen().catch(() => {}));
+document.addEventListener('keydown', (e) => {
+  if (!G.project || e.target.closest?.('input,textarea,select')) return;
+  if (e.key === 'Escape' && !$('#lightbox').hidden) { $('#lightbox').hidden = true; return; }
+  if (['ArrowRight', 'PageDown'].includes(e.key) || (e.key === ' ' && e.target === document.body)) { e.preventDefault(); go(G.idx + 1); }
+  else if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); go(G.idx - 1); }
+  else if (e.key === 'Home') go(0);
+  else if (e.key === 'End') go(total() - 1);
+  else if (e.key === 'r' || e.key === 'R') G.s3.resetView();
+});
+
+// part names on hover / tap
+const stage = $('#stage');
+let tipEl = null, down = null;
+function showTip(x, y) {
+  const id = G.s3?.pick(x, y);
+  const part = id && partById(id);
+  if (!part) { tipEl?.remove(); tipEl = null; return; }
+  if (!tipEl) { tipEl = el('div', { class: 'tip-label' }); stage.append(tipEl); }
+  const r = stage.getBoundingClientRect();
+  tipEl.textContent = part.name || 'Part';
+  tipEl.style.left = x - r.left + 'px'; tipEl.style.top = y - r.top + 'px';
+}
+let raf = 0;
+stage.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse' || e.buttons) { tipEl?.remove(); tipEl = null; return; }
+  cancelAnimationFrame(raf); raf = requestAnimationFrame(() => showTip(e.clientX, e.clientY));
+});
+stage.addEventListener('pointerleave', () => { tipEl?.remove(); tipEl = null; });
+stage.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+stage.addEventListener('pointerup', (e) => {
+  if (e.pointerType !== 'mouse' && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
+    showTip(e.clientX, e.clientY);
+    clearTimeout(showTip.t); showTip.t = setTimeout(() => { tipEl?.remove(); tipEl = null; }, 1800);
+  }
+});
+
+// ------------------------------------------------------------------ open file / drop
+function showMessage(html, { open = false } = {}) {
+  const m = $('#msg');
+  m.hidden = false;
+  m.replaceChildren(el('div', { class: 'box' }, ...html, open ? el('p', {}, el('button', { class: 'btn primary', onclick: () => $('#file').click() }, 'Open a .guide file')) : ''));
+}
+async function openFile(f) {
+  if (!f) return;
+  showMessage([el('div', { class: 'spinner' }), 'Loading ' + f.name + '…']);
+  try { await start(await f.arrayBuffer()); } catch (e) { fail(e); }
+}
+$('#file').onchange = (e) => { openFile(e.target.files[0]); e.target.value = ''; };
+$('#open-btn').onclick = () => $('#file').click();
+stage.addEventListener('dragover', (e) => { if (!allowOpen) return; e.preventDefault(); $('#msg').classList.add('drop'); });
+stage.addEventListener('dragleave', () => $('#msg').classList.remove('drop'));
+stage.addEventListener('drop', (e) => { if (!allowOpen) return; e.preventDefault(); $('#msg').classList.remove('drop'); openFile(e.dataTransfer.files[0]); });
+function fail(e) {
+  console.error(e);
+  showMessage([el('p', {}, el('b', {}, 'Could not open this guide.')), el('p', {}, e.message || String(e))], { open: allowOpen });
+}
+
+// ------------------------------------------------------------------ embedding API (postMessage)
+const embedded = window.parent !== window;
+function post(msg) { if (embedded) window.parent.postMessage(msg, '*'); }
+window.addEventListener('message', async (e) => {
+  if (!embedded || e.source !== window.parent) return;
+  const d = e.data || {};
+  if (d.type === 'guide:goto' && G.project) go(+d.step || 0);
+  else if (d.type === 'guide:next' && G.project) go(G.idx + 1);
+  else if (d.type === 'guide:prev' && G.project) go(G.idx - 1);
+  else if (d.type === 'guide:theme') setTheme(String(d.theme), false);
+  else if (d.type === 'guide:load') {
+    try {
+      showMessage([el('div', { class: 'spinner' }), 'Loading…']);
+      const buf = d.data instanceof Blob ? await d.data.arrayBuffer() : d.data instanceof ArrayBuffer ? d.data : await fetchGuide(String(d.url));
+      await start(buf);
+    } catch (err) { fail(err); }
+  }
+});
+
+// ------------------------------------------------------------------ boot
+async function fetchGuide(url) {
+  const u = new URL(url, location.href);
+  if (!/^https?:$|^blob:$/.test(u.protocol)) throw new Error('Only http(s) addresses can be loaded.');
+  let r;
+  try { r = await fetch(u); } catch { throw new Error(`Could not download ${u.href}. If it is on another site, that site must allow cross-origin requests (CORS).`); }
+  if (!r.ok) throw new Error(`Could not download ${u.href} (HTTP ${r.status}).`);
+  return r.arrayBuffer();
+}
+const inline = $('#guide-data').textContent.trim();
+const allowOpen = !inline && !params.get('src');
+$('#open-btn').hidden = !allowOpen;
+(async () => {
+  try {
+    if (inline) {
+      const bin = atob(inline), buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      await start(buf.buffer);
+    } else if (params.get('src')) {
+      await start(await fetchGuide(params.get('src')));
+    } else if (!embedded || params.get('wait') !== '1') {
+      showMessage([el('p', {}, el('b', {}, 'Guide Viewer')), el('p', {}, 'Drop a .guide file made with Guide Builder here, or open one.')], { open: true });
+    }
+  } catch (e) { fail(e); }
+})();
+</script>
+</body>
+</html>
