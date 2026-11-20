@@ -2,9 +2,9 @@
 
 A read-only 3D viewer for assembly guides made with [Guide Builder](../_guide_builder/). The whole viewer is one HTML file, `guide-viewer.html`. You can open it directly, put it on any web host, or embed it in another page with an `<iframe>`.
 
-**[Try the live demo](https://USERNAME.github.io/REPO/)**: click the picture to open the example guide in 3D.
+**[Try the live demo](https://hannabanaaahh.github.io/3D-guide-viewer/)**: click the picture to open the example guide in 3D.
 
-[![Guide Viewer showing step 2 of the example guide](examples/screenshot.png)](https://USERNAME.github.io/REPO/guide-viewer.html?src=examples/sample.guide)
+[![Guide Viewer showing step 2 of the example guide](examples/screenshot.png)](https://hannabanaaahh.github.io/3D-guide-viewer/guide-viewer.html?src=examples/sample.guide)
 
 Readers can:
 
